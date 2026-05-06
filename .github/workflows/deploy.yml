@@ -74,13 +74,24 @@ jobs:
 
       - name: Get kubeconfig from SSM
         run: |
-          aws ssm get-parameter \
-            --name "/prod/k3s/kubeconfig" \
-            --with-decryption \
-            --region ${{ env.AWS_REGION }} \
-            --query "Parameter.Value" \
-            --output text > kubeconfig.yaml
-          echo "KUBECONFIG=$(pwd)/kubeconfig.yaml" >> $GITHUB_ENV
+          for i in $(seq 1 10); do
+            VALUE=$(aws ssm get-parameter \
+              --name "/prod/k3s/kubeconfig" \
+              --with-decryption \
+              --region ${{ env.AWS_REGION }} \
+              --query "Parameter.Value" \
+              --output text)
+            if echo "$VALUE" | grep -q "apiVersion"; then
+              echo "$VALUE" > kubeconfig.yaml
+              echo "KUBECONFIG=$(pwd)/kubeconfig.yaml" >> $GITHUB_ENV
+              echo "Kubeconfig obtido com sucesso."
+              exit 0
+            fi
+            echo "K3s ainda inicializando, aguardando 30s... ($i/10)"
+            sleep 30
+          done
+          echo "Timeout: kubeconfig não disponível após 5 minutos."
+          exit 1
 
       - name: Setup kubectl
         uses: azure/setup-kubectl@v3
