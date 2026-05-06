@@ -28,19 +28,3 @@ jobs:
         run: npm run build
         env:
           VITE_API_URL: https://api.placeholder.com
-
-  docker-build:
-    name: Docker Build (smoke test)
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: false
-          tags: cut-url-frontend:pr-${{ github.event.pull_request.number }}
-          build-args: |
-            VITE_API_URL=https://api.placeholder.com

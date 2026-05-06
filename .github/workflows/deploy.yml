@@ -6,65 +6,32 @@ on:
 
 permissions:
   id-token: write
-  contents: write
+  contents: read
 
 env:
   AWS_REGION: us-east-1
 
 jobs:
-  build-push:
-    name: Build & Push
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: yanclops/cut-url
-          tags: |
-            type=sha,prefix=,format=short
-            type=raw,value=latest
-
-      - name: Login DockerHub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build & Push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          build-args: |
-            VITE_API_URL=${{ secrets.VITE_API_URL }}
-
-      - name: Update image tag in manifest
-        run: |
-          SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          sed -i "s|image: yanclops/cut-url:.*|image: yanclops/cut-url:$SHA|g" k3s/deployment.yaml
-
-      - name: Commit updated manifest
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add k3s/deployment.yaml
-          git diff --staged --quiet || git commit -m "ci: update frontend image to $(echo ${{ github.sha }} | cut -c1-7) [skip ci]"
-          git push
-
   deploy:
-    name: Deploy → K3s
+    name: Build → S3 → CloudFront
     runs-on: ubuntu-latest
-    needs: build-push
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          ref: main
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -72,45 +39,11 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Get kubeconfig from SSM
+      - name: Deploy para S3
+        run: aws s3 sync dist/ s3://${{ secrets.S3_BUCKET }} --delete
+
+      - name: Invalidar cache CloudFront
         run: |
-          for i in $(seq 1 10); do
-            VALUE=$(aws ssm get-parameter \
-              --name "/prod/k3s/kubeconfig" \
-              --with-decryption \
-              --region ${{ env.AWS_REGION }} \
-              --query "Parameter.Value" \
-              --output text)
-            if echo "$VALUE" | grep -q "apiVersion"; then
-              echo "$VALUE" > kubeconfig.yaml
-              echo "KUBECONFIG=$(pwd)/kubeconfig.yaml" >> $GITHUB_ENV
-              echo "Kubeconfig obtido com sucesso."
-              exit 0
-            fi
-            echo "K3s ainda inicializando, aguardando 30s... ($i/10)"
-            sleep 30
-          done
-          echo "Timeout: kubeconfig não disponível após 5 minutos."
-          exit 1
-
-      - name: Setup kubectl
-        uses: azure/setup-kubectl@v3
-
-      - name: Apply namespace
-        run: kubectl apply -f k3s/namespace.yaml
-
-      - name: Create DockerHub pull secret
-        run: |
-          kubectl create secret docker-registry dockerhub-secret \
-            --docker-username=${{ secrets.DOCKERHUB_USERNAME }} \
-            --docker-password=${{ secrets.DOCKERHUB_TOKEN }} \
-            --namespace=cut-url \
-            --dry-run=client -o yaml | kubectl apply -f -
-
-      - name: Apply manifests
-        run: |
-          kubectl apply -f k3s/deployment.yaml
-          kubectl apply -f k3s/service.yaml
-
-      - name: Wait for rollout
-        run: kubectl rollout status deployment/cut-url -n cut-url --timeout=120s
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ secrets.CLOUDFRONT_DISTRIBUTION_ID }} \
+            --paths "/*"
