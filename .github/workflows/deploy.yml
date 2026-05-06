@@ -48,13 +48,13 @@ jobs:
       - name: Update image tag in manifest
         run: |
           SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          sed -i "s|image: yanclops/cut-url-frontend:.*|image: yanclops/cut-url-frontend:$SHA|g" k8s/deployment.yaml
+          sed -i "s|image: yanclops/cut-url-frontend:.*|image: yanclops/cut-url-frontend:$SHA|g" k3s/deployment.yaml
 
       - name: Commit updated manifest
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add k8s/deployment.yaml
+          git add k3s/deployment.yaml
           git diff --staged --quiet || git commit -m "ci: update frontend image to $(echo ${{ github.sha }} | cut -c1-7) [skip ci]"
           git push
 
@@ -88,7 +88,7 @@ jobs:
         uses: azure/setup-kubectl@v3
 
       - name: Apply namespace
-        run: kubectl apply -f k8s/namespace.yaml
+        run: kubectl apply -f k3s/namespace.yaml
 
       - name: Create DockerHub pull secret
         run: |
@@ -100,8 +100,8 @@ jobs:
 
       - name: Apply manifests
         run: |
-          kubectl apply -f k8s/deployment.yaml
-          kubectl apply -f k8s/service.yaml
+          kubectl apply -f k3s/deployment.yaml
+          kubectl apply -f k3s/service.yaml
 
       - name: Wait for rollout
         run: kubectl rollout status deployment/cut-url-frontend -n cut-url --timeout=120s
